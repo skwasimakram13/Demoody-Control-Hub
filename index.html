@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Demoody Control Hub</title>
+    <!-- We will use Inter font for a modern look -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./src/renderer/index.css">
+</head>
+
+<body>
+
+    <!-- Global Drop Overlay -->
+    <div id="drop-overlay"
+        style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); z-index: 9999; justify-content: center; align-items: center; pointer-events: none; border: 4px dashed var(--accent);">
+        <div style="text-align: center;">
+            <div style="font-size: 4rem; margin-bottom: 20px;">📦</div>
+            <h2 style="font-weight: 300;">Drop anywhere to share</h2>
+        </div>
+    </div>
+
+    <!-- Device Selection Modal (for dropping files while not in chat) -->
+    <div id="device-select-modal"
+        style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8); backdrop-filter: blur(10px); z-index: 9998; justify-content: center; align-items: center;">
+        <div
+            style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; min-width: 350px; text-align: center;">
+            <h3 style="margin-top: 0; font-weight: 400; margin-bottom: 20px;">Send File To...</h3>
+            <div id="modal-device-list"
+                style="display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto;">
+                <!-- Devices injected here -->
+            </div>
+            <button id="btn-close-modal"
+                style="margin-top: 20px; padding: 8px 16px; background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 6px; cursor: pointer;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Screen Viewer Modal -->
+    <div id="screen-viewer-modal"
+        style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: black; z-index: 10000; flex-direction: column;">
+        <div
+            style="padding: 12px 24px; background: rgba(0,0,0,0.8); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border);">
+            <h3 style="margin: 0; font-weight: 400;" id="viewer-title">Viewing Screen</h3>
+            <button id="btn-close-viewer"
+                style="padding: 6px 16px; background: var(--danger); border: none; color: white; border-radius: 4px; cursor: pointer;">Stop
+                Viewing</button>
+        </div>
+        <div
+            style="flex: 1; display: flex; justify-content: center; align-items: center; overflow: hidden; position: relative;">
+            <video id="remote-video" autoplay playsinline
+                style="max-width: 100%; max-height: 100%; background: #000;"></video>
+            <div id="viewer-loading" style="position: absolute; color: white;">Connecting to stream...</div>
+        </div>
+    </div>
+
+    <!-- First Launch Onboarding Modal -->
+    <div id="onboarding-modal"
+        style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: var(--background); z-index: 10001; justify-content: center; align-items: center; flex-direction: column;">
+        <div
+            style="background: var(--surface); border: 1px solid var(--border); padding: 40px; border-radius: 16px; text-align: center; max-width: 400px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+            <div style="font-size: 3rem; margin-bottom: 20px;">🚀</div>
+            <h2 style="margin-top: 0; font-weight: 500;">Welcome to Demoody HUB</h2>
+            <p class="muted" style="margin-bottom: 30px;">Let's set up your completely private, offline, high-speed
+                sharing profile.</p>
+
+            <div style="text-align: left; margin-bottom: 20px;">
+                <label
+                    style="display: block; font-size: 0.85rem; margin-bottom: 6px; color: var(--text-secondary);">Your
+                    Display Identity</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="onboard-avatar" value="💻" title="Avatar (Emoji)"
+                        style="width: 50px; text-align: center; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 6px; color: white; font-size: 1.2rem;">
+                    <input type="text" id="onboard-name" value="My PC" placeholder="e.g. Wassu's Laptop"
+                        style="flex: 1; padding: 10px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 6px; color: white;">
+                </div>
+            </div>
+
+            <button id="btn-finish-onboarding" class="primary-button"
+                style="width: 100%; padding: 12px; font-size: 1rem;">Start Sharing →</button>
+        </div>
+    </div>
+
+    <div id="app">
+        <header class="app-header">
+            <h1>Demoody Control Hub</h1>
+        </header>
+
+        <main class="app-content">
+            <aside class="sidebar">
+                <div class="user-profile">
+                    <div id="my-avatar" class="avatar">💻</div>
+                    <div class="info" style="flex: 1; min-width: 0;">
+                        <div id="my-name" class="name"
+                            style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">My Computer</div>
+                        <div id="my-os"
+                            style="font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                            Online</div>
+                    </div>
+                    <button id="btn-share-screen"
+                        style="background: var(--accent); color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 600; flex-shrink: 0;"
+                        title="Broadcast Screen">📺 Share</button>
+                </div>
+
+                <nav class="sidebar-nav">
+                    <button class="nav-item active" data-view="radar">Radar (Nearby)</button>
+                    <button class="nav-item" data-view="chat">Messages</button>
+                    <button class="nav-item" data-view="group">Public Shared Folders</button>
+                </nav>
+
+                <div class="settings-panel">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="public-folder-toggle">
+                        <span class="slider round"></span>
+                    </label>
+                    <div style="display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1;">
+                        <span class="toggle-label" style="font-weight: 600;">Share Public Folder</span>
+                        <button class="nav-item" id="btn-select-folder"
+                            style="margin: 0; padding: 4px 8px; font-size: 0.8rem; border: 1px solid var(--border); width: fit-content;">Change
+                            Folder</button>
+                        <div id="active-folder-path" class="muted"
+                            style="font-size: 0.7rem; word-break: break-all; margin-top: 4px; line-height: 1.2;">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-panel" style="display: flex; flex-direction: column; align-items: flex-start;">
+                    <div style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                        <span class="toggle-label" style="font-weight: 600;">Save Downloads To:</span>
+                        <button class="nav-item" id="btn-select-download"
+                            style="margin: 0; padding: 4px 8px; font-size: 0.8rem; border: 1px solid var(--border); width: fit-content;">Change
+                            Folder</button>
+                        <div id="active-download-path" class="muted"
+                            style="font-size: 0.7rem; word-break: break-all; margin-top: 4px; line-height: 1.2;">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-panel" style="display: flex; flex-direction: column; align-items: flex-start;">
+                    <div style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                        <span class="toggle-label" style="font-weight: 600;">Max Upload Speed:</span>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <input type="range" id="throttle-slider" min="0" max="100" value="0" style="flex: 1;">
+                            <span id="throttle-value"
+                                style="font-size: 0.8rem; color: var(--accent); min-width: 40px;">Unlim</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-panel" style="display: flex; flex-direction: column; align-items: flex-start;">
+                    <div style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                        <span class="toggle-label" style="font-weight: 600;">My Identity:</span>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <input type="text" id="avatar-input" value="💻"
+                                style="width: 40px; height: 32px; font-size: 1.2rem; text-align: center; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 4px; color: white;"
+                                title="Emoji Avatar">
+                            <input type="text" id="name-input" value="My PC"
+                                style="flex: 1; height: 32px; padding: 0 8px; font-size: 0.9rem; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 4px; color: white;"
+                                title="Display Name">
+                        </div>
+                        <button class="nav-item" id="btn-save-identity"
+                            style="margin: 0; padding: 6px 12px; font-size: 0.85rem; font-weight: 600; border: 1px solid var(--border); width: 100%; border-radius: 4px; cursor: pointer; background: rgba(255,255,255,0.05); margin-top: 4px;">Update</button>
+                    </div>
+                </div>
+            </aside>
+
+            <section class="main-view view-active" id="view-radar">
+                <div class="radar-header" style="display: flex; justify-content: space-between; align-items: flex-end;">
+                    <div>
+                        <h2>Nearby Devices</h2>
+                        <p>Select a device on your WiFi to start sharing.</p>
+                    </div>
+                    <button id="btn-clear-inactive"
+                        style="margin-bottom: 16px; background: transparent; color: var(--text-secondary); border: 1px solid var(--border); padding: 4px 10px; border-radius: 4px; font-size: 0.85rem; cursor: pointer; transition: 0.2s;">
+                        🧹 Delete Inactive
+                    </button>
+                </div>
+                <div class="devices-grid" id="devices-grid">
+                    <!-- Dynamic devices injected here -->
+                </div>
+            </section>
+
+            <section class="main-view" id="view-chat">
+                <div class="empty-state" id="chat-empty-state">
+                    <div class="icon">💬</div>
+                    <h2>No device selected</h2>
+                    <p>Go to Radar and select a device to start messaging and transferring files.</p>
+                </div>
+
+                <div class="chat-container" id="chat-active-state" style="display:none;">
+                    <div class="chat-header">
+                        <h3 id="chat-recipient-name">Recipient</h3>
+                    </div>
+                    <div class="chat-messages" id="chat-messages">
+                        <!-- Messages injected here -->
+                    </div>
+                    <div class="chat-input-area">
+                        <input type="file" id="file-input" style="display:none">
+                        <button class="icon-button" id="btn-attach" title="Send File">📎</button>
+                        <input type="text" id="chat-input" placeholder="Type a message...">
+                        <button class="primary-button" id="btn-send">Send</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="main-view" id="view-group">
+                <div class="radar-header">
+                    <h2>Public Folders</h2>
+                    <p>Browse files that others have shared publicly on this network.</p>
+                </div>
+                <div class="group-container">
+                    <div class="group-sidebar" id="group-devices-list">
+                        <!-- Public folders devices list -->
+                        <p class="muted">No devices sharing right now.</p>
+                    </div>
+                    <div class="group-files" id="group-files-list">
+                        <div class="empty-state">
+                            <div class="icon">📁</div>
+                            <h2>Select a shared folder</h2>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <script type="module" src="./src/renderer/main.js"></script>
+</body>
+
+</html>

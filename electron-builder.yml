@@ -1,0 +1,31 @@
+appId: com.demoody.controlhub
+productName: Demoody Control Hub
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+win:
+  icon: build/icon.png
+  target:
+    - nsis
+    - portable
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: Demoody Control Hub
+  perMachine: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  license: build/license.txt
+mac:
+  icon: build/icon.png
+  category: public.app-category.utilities
+  target:
+    - dmg
+    - zip
+linux:
+  icon: build/icon.png
+  target:
+    - AppImage
+    - deb
