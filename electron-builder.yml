@@ -29,3 +29,7 @@ linux:
   target:
     - AppImage
     - deb
+publish:
+  provider: github
+  owner: skwasimakram13
+  repo: Demoody-Control-Hub
