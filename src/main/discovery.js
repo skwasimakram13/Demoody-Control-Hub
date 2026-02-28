@@ -86,6 +86,23 @@ export class DiscoveryService {
                 }
             }
         })
+
+        // Periodically refresh to catch any delayed devices
+        if (!this.refreshInterval) {
+            this.refreshInterval = setInterval(() => {
+                this.refresh();
+            }, 30000);
+        }
+    }
+
+    refresh() {
+        console.log('Discovery refresh triggered');
+        if (this.browser && typeof this.browser.update === 'function') {
+            this.browser.update();
+        } else if (this.browser) {
+            this.browser.stop();
+            this.browser.start();
+        }
     }
 
     getDevices() {
@@ -149,6 +166,10 @@ export class DiscoveryService {
 
     stop() {
         console.log('Stopping discovery service')
+        if (this.refreshInterval) {
+            clearInterval(this.refreshInterval);
+            this.refreshInterval = null;
+        }
         if (this.service) {
             this.service.stop()
             this.service = null

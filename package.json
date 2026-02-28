@@ -1,7 +1,7 @@
 {
   "name": "demoody-control-hub",
   "productName": "Demoody Control Hub",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Demoody Internal Operating System",
   "main": "out/main/index.js",
   "scripts": {

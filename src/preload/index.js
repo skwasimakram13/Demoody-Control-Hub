@@ -11,6 +11,7 @@ const api = {
     getDesktopSources: () => ipcRenderer.invoke('get-desktop-sources'),
     selectFolder: () => ipcRenderer.invoke('select-folder'),
     clearInactiveDevices: () => ipcRenderer.send('clear-inactive-devices'),
+    refreshDevices: () => ipcRenderer.send('refresh-devices'),
     completeOnboarding: () => ipcRenderer.send('complete-onboarding'),
 
     // WebRTC sending

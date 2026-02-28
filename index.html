@@ -172,10 +172,16 @@
                         <h2>Nearby Devices</h2>
                         <p>Select a device on your WiFi to start sharing.</p>
                     </div>
-                    <button id="btn-clear-inactive"
-                        style="margin-bottom: 16px; background: transparent; color: var(--text-secondary); border: 1px solid var(--border); padding: 4px 10px; border-radius: 4px; font-size: 0.85rem; cursor: pointer; transition: 0.2s;">
-                        🧹 Delete Inactive
-                    </button>
+                    <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+                        <button id="btn-refresh-devices"
+                            style="background: transparent; color: var(--text-secondary); border: 1px solid var(--border); padding: 4px 10px; border-radius: 4px; font-size: 0.85rem; cursor: pointer; transition: 0.2s;">
+                            🔄 Refresh
+                        </button>
+                        <button id="btn-clear-inactive"
+                            style="background: transparent; color: var(--text-secondary); border: 1px solid var(--border); padding: 4px 10px; border-radius: 4px; font-size: 0.85rem; cursor: pointer; transition: 0.2s;">
+                            🧹 Delete Inactive
+                        </button>
+                    </div>
                 </div>
                 <div class="devices-grid" id="devices-grid">
                     <!-- Dynamic devices injected here -->
@@ -196,10 +202,15 @@
                     <div class="chat-messages" id="chat-messages">
                         <!-- Messages injected here -->
                     </div>
+                    <!-- Attachment Staging Area -->
+                    <div id="chat-attachments-preview"
+                        style="display: none; padding: 12px; border-top: 1px solid var(--border); background: rgba(0,0,0,0.2); gap: 8px; overflow-x: auto; align-items: center;">
+                        <!-- Pending files injected here -->
+                    </div>
                     <div class="chat-input-area">
-                        <input type="file" id="file-input" style="display:none">
+                        <input type="file" id="file-input" style="display:none" multiple>
                         <button class="icon-button" id="btn-attach" title="Send File">📎</button>
-                        <input type="text" id="chat-input" placeholder="Type a message...">
+                        <input type="text" id="chat-input" placeholder="Type a message or select files...">
                         <button class="primary-button" id="btn-send">Send</button>
                     </div>
                 </div>

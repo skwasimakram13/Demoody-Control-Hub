@@ -7,6 +7,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { DiscoveryService } from './discovery'
 import { LanServer } from './server'
+import icon from '../../build/icon.png?asset'
 
 let mainWindow = null
 let lanServer = null
@@ -51,18 +52,6 @@ function saveConfig() {
     fs.writeFileSync(configPath, JSON.stringify(appConfig))
 }
 
-function getIconPath() {
-    if (app.isPackaged) {
-        const prodIcon = join(process.resourcesPath, 'build/icon.png')
-        if (fs.existsSync(prodIcon)) return prodIcon
-    } else {
-        const devIcon = join(__dirname, '../../build/icon.png')
-        if (fs.existsSync(devIcon)) return devIcon
-    }
-    // Fallback if missing
-    return join(__dirname, '../../resources/icon.png')
-}
-
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1100,
@@ -70,7 +59,7 @@ function createWindow() {
         minWidth: 800,
         minHeight: 600,
         show: false,
-        icon: getIconPath(),
+        icon: icon,
         autoHideMenuBar: true,
         webPreferences: {
             preload: join(__dirname, '../preload/index.js'),
@@ -191,6 +180,12 @@ app.whenReady().then(() => {
         }
     })
 
+    ipcMain.on('refresh-devices', () => {
+        if (discoveryService) {
+            discoveryService.refresh()
+        }
+    })
+
     ipcMain.on('set-public-folder', (_, { enabled, path }) => {
         if (lanServer) lanServer.setPublicFolderAccess(enabled, path)
     })
@@ -269,8 +264,7 @@ app.whenReady().then(() => {
     })
 
     // Create Tray
-    const iconPath = getIconPath()
-    let trayIcon = nativeImage.createFromPath(iconPath)
+    let trayIcon = nativeImage.createFromPath(icon)
     if (trayIcon.isEmpty()) {
         // Fallback to empty transparent icon if no file exists
         trayIcon = nativeImage.createEmpty()

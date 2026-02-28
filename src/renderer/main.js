@@ -11,7 +11,8 @@ const state = {
     peerConnections: new Map(), // WebRTC RTCPeerConnections (socketId -> pc)
     localStream: null, // Our screen capture stream to push
     messages: new Map(), // Messages stored by deviceId
-    activeTransfers: new Map() // fileId -> state
+    activeTransfers: new Map(), // fileId -> state
+    pendingAttachments: [] // Files waiting to be sent
 };
 
 // Config
@@ -38,7 +39,7 @@ const groupDevicesList = document.getElementById('group-devices-list');
 const groupFilesList = document.getElementById('group-files-list');
 
 // ==========================================
-// Clear Inactive Devices
+// Clear & Refresh Devices
 // ==========================================
 const btnClearInactive = document.getElementById('btn-clear-inactive');
 if (btnClearInactive) {
@@ -56,6 +57,19 @@ if (btnClearInactive) {
 
         if (window.api && window.api.clearInactiveDevices) {
             window.api.clearInactiveDevices();
+        }
+    });
+}
+
+const btnRefreshDevices = document.getElementById('btn-refresh-devices');
+if (btnRefreshDevices) {
+    btnRefreshDevices.addEventListener('click', () => {
+        // Visual feedback
+        btnRefreshDevices.style.opacity = '0.5';
+        setTimeout(() => btnRefreshDevices.style.opacity = '1', 1000);
+
+        if (window.api && window.api.refreshDevices) {
+            window.api.refreshDevices();
         }
     });
 }
@@ -560,28 +574,43 @@ function renderChatMessages() {
 }
 
 // Chat Sending Logic
-btnSend.addEventListener('click', () => {
+btnSend.addEventListener('click', async () => {
     const text = chatInput.value.trim();
-    if (!text || !state.activeChatDevice) return;
+    const hasFiles = state.pendingAttachments.length > 0;
 
-    // Connect to their Socket server and emit
-    const socket = state.socketConnections.get(state.activeChatDevice.id);
-    if (socket) {
-        console.log(`[Renderer] Emitting message to socket for ${state.activeChatDevice.id}`);
-        socket.emit('message', JSON.stringify({
-            senderId: state.myInfo.id,
-            text: text
-        }));
+    if ((!text && !hasFiles) || !state.activeChatDevice) return;
 
-        // Add to my own view
-        addMessageToState(state.activeChatDevice.id, {
-            type: 'text',
-            senderInfo: 'my',
-            text: text
-        });
-        renderChatMessages();
-        chatInput.value = '';
+    // Connect to their Socket server and emit text if any
+    if (text) {
+        const socket = state.socketConnections.get(state.activeChatDevice.id);
+        if (socket) {
+            console.log(`[Renderer] Emitting message to socket for ${state.activeChatDevice.id}`);
+            socket.emit('message', JSON.stringify({
+                senderId: state.myInfo.id,
+                text: text
+            }));
+
+            // Add to my own view
+            addMessageToState(state.activeChatDevice.id, {
+                type: 'text',
+                senderInfo: 'my',
+                text: text
+            });
+        }
     }
+
+    // Send all queued files
+    if (hasFiles) {
+        for (const file of state.pendingAttachments) {
+            await initiateTransfer(file, state.activeChatDevice);
+        }
+        // Clear queue
+        state.pendingAttachments = [];
+        renderAttachmentPreview();
+    }
+
+    renderChatMessages();
+    chatInput.value = '';
 });
 
 chatInput.addEventListener('keypress', (e) => {
@@ -591,14 +620,48 @@ chatInput.addEventListener('keypress', (e) => {
 // File Upload Logic (Ultra Fast Multi-Threaded Chunker)
 btnAttach.addEventListener('click', () => fileInput.click());
 
-fileInput.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file || !state.activeChatDevice) return;
+function renderAttachmentPreview() {
+    const container = document.getElementById('chat-attachments-preview');
+    container.innerHTML = '';
+
+    if (state.pendingAttachments.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+
+    container.style.display = 'flex';
+
+    state.pendingAttachments.forEach((file, index) => {
+        const item = document.createElement('div');
+        item.style.cssText = 'background: rgba(255,255,255,0.05); border: 1px solid var(--border); padding: 4px 10px; border-radius: 16px; display: flex; align-items: center; gap: 8px; font-size: 0.8rem; white-space: nowrap;';
+
+        item.innerHTML = `
+            <span>📄</span>
+            <span style="max-width: 150px; overflow: hidden; text-overflow: ellipsis;" title="${file.name}">${file.name}</span>
+            <button class="remove-attachment" data-index="${index}" style="background: none; border: none; color: var(--danger); cursor: pointer; padding: 0 4px;">&times;</button>
+        `;
+        container.appendChild(item);
+    });
+
+    container.querySelectorAll('.remove-attachment').forEach(btn => {
+        btn.onclick = (e) => {
+            const idx = parseInt(e.target.getAttribute('data-index'));
+            state.pendingAttachments.splice(idx, 1);
+            renderAttachmentPreview();
+        };
+    });
+}
+
+fileInput.addEventListener('change', (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0 || !state.activeChatDevice) return;
+
+    // Push into queue instead of sending
+    state.pendingAttachments.push(...files);
+    renderAttachmentPreview();
 
     // Clean up input
     e.target.value = '';
-
-    await initiateTransfer(file, state.activeChatDevice);
 });
 
 async function initiateTransfer(file, device) {
@@ -793,6 +856,17 @@ function markTransferMessageUI(deviceId, fileId, status) {
     if (msg) {
         msg.status = status;
         msg.progress = status === 'completed' ? 100 : msg.progress;
+
+        if (status === 'completed') {
+            // Once finished uploading, transition visually into a generic 'file' message so the user has a history of it.
+            msg.type = 'file';
+            msg.text = `Successfully sent file: ${msg.file.name}`;
+            msg.file = {
+                name: msg.file.name,
+                size: msg.file.size
+            };
+        }
+
         renderChatMessages();
     }
 }
@@ -1051,7 +1125,7 @@ const modalDeviceList = document.getElementById('modal-device-list');
 const btnCloseModal = document.getElementById('btn-close-modal');
 
 let dragCounter = 0; // Needed to handle child nodes firing dragleave
-let pendingFileToShare = null;
+let pendingFilesForDrop = [];
 
 // Show overlay when dragging into window
 window.addEventListener('dragenter', (e) => {
@@ -1075,37 +1149,47 @@ window.addEventListener('dragover', (e) => {
     e.preventDefault();
 });
 
-// Handle the actual drop
-window.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dragCounter = 0;
-    dropOverlay.style.display = 'none';
+// --- Setup Global Listeners ---
 
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        const file = e.dataTransfer.files[0];
-        handleGlobalFileIntent(file);
+document.body.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    if (!dropzoneOverlay.classList.contains('active')) {
+        dropzoneOverlay.classList.add('active');
     }
 });
 
-// Central routing for any globally dragged or pasted file
-function handleGlobalFileIntent(file) {
-    if (state.activeChatDevice) {
-        // We are already in a chat, send it immediately! (Zero Friction)
-        initiateTransfer(file, state.activeChatDevice);
-    } else {
-        // We are not in a chat, ask where to send it
-        showDeviceSelectModal(file);
+document.body.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    if (e.relatedTarget === null || e.target === dropzoneOverlay) {
+        dropzoneOverlay.classList.remove('active');
     }
-}
+});
+
+document.body.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    dropzoneOverlay.classList.remove('active');
+
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+
+    if (state.activeChatDevice) {
+        // If chat is open, just queue them
+        state.pendingAttachments.push(...files);
+        renderAttachmentPreview();
+    } else {
+        // No chat open, we need to ask who to send to
+        pendingFilesForDrop = files;
+        showDeviceSelectorModal();
+    }
+});
 
 // Device Selection Modal Logic
-function showDeviceSelectModal(file) {
+function showDeviceSelectorModal() {
     if (state.devices.size === 0) {
         alert("No devices found on the network yet.");
         return;
     }
 
-    pendingFileToShare = file;
     modalDeviceList.innerHTML = '';
 
     state.devices.forEach(device => {
@@ -1141,9 +1225,10 @@ function showDeviceSelectModal(file) {
             deviceSelectModal.style.display = 'none';
             // Switch to their chat view organically
             document.querySelector(`.device-card[data-id="${device.id}"]`)?.click();
-            // Start transfer
-            initiateTransfer(pendingFileToShare, device);
-            pendingFileToShare = null;
+            // Queue transfer
+            state.pendingAttachments.push(...pendingFilesForDrop);
+            renderAttachmentPreview();
+            pendingFilesForDrop = [];
         };
 
         modalDeviceList.appendChild(btn);
@@ -1158,34 +1243,44 @@ function showDeviceSelectModal(file) {
 
 btnCloseModal.addEventListener('click', () => {
     deviceSelectModal.style.display = 'none';
-    pendingFileToShare = null;
+    pendingFilesForDrop = [];
 });
 
 // Clipboard Paste Support
-window.addEventListener('paste', (e) => {
-    const items = (e.clipboardData || e.originalEvent.clipboardData).items;
-    let pastedFile = null;
+document.addEventListener('paste', async (e) => {
+    // Only intercept if we aren't typing in the chat input or identity inputs
+    if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
+        const id = document.activeElement.id;
+        if (id === 'chat-input' || id === 'name-input' || id === 'avatar-input') return;
+    }
 
-    for (const index in items) {
+    const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+    const files = [];
+
+    for (let index in items) {
         const item = items[index];
         if (item.kind === 'file') {
             const blob = item.getAsFile();
             if (blob) {
-                // If it's an image without a real name (e.g. from print screen), name it
-                let name = blob.name;
-                if (!name || name === 'image.png') {
-                    name = `Pasted-Image-${Date.now()}.png`;
+                // If it's an image without a name from clipboard, give it one
+                if (blob.name === 'image.png' || !blob.name) {
+                    const newFile = new File([blob], `Pasted-Image-${Date.now()}.png`, { type: blob.type });
+                    files.push(newFile);
+                } else {
+                    files.push(blob);
                 }
-
-                // Reconstruct a File object to ensure name and lastModified are set properly
-                pastedFile = new File([blob], name, { type: blob.type });
-                break; // Just grab the first file
             }
         }
     }
 
-    if (pastedFile) {
-        handleGlobalFileIntent(pastedFile);
+    if (files.length > 0) {
+        if (state.activeChatDevice) {
+            state.pendingAttachments.push(...files);
+            renderAttachmentPreview();
+        } else {
+            pendingFilesForDrop = files;
+            showDeviceSelectorModal();
+        }
     }
 });
 
