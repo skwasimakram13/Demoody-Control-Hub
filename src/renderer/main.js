@@ -166,7 +166,13 @@ window.startViewingScreen = async (casterId) => {
     state.peerConnections.set('viewer', pc);
 
     pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+        if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+            document.getElementById('btn-close-viewer').click();
+        }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
             document.getElementById('btn-close-viewer').click();
         }
     };
@@ -214,6 +220,20 @@ window.api.onWebrtcOffer(async (offer, socketId) => {
     state.localStream.getTracks().forEach(track => {
         pc.addTrack(track, state.localStream);
     });
+
+    pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+            pc.close();
+            state.peerConnections.delete(socketId);
+        }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+            pc.close();
+            state.peerConnections.delete(socketId);
+        }
+    };
 
     pc.onicecandidate = (event) => {
         if (event.candidate) {
@@ -667,9 +687,6 @@ fileInput.addEventListener('change', (e) => {
 async function initiateTransfer(file, device) {
     const fileId = `${state.myInfo.id}-${Date.now()}-${file.size}`;
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-
-    // Clean up input
-    e.target.value = '';
 
     // Initialize UI message
     const msgObj = {

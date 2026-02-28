@@ -7,7 +7,7 @@ import os from 'os'
 import multer from 'multer'
 
 export class LanServer {
-    constructor(port = 0, onMessage, onFileReceived, onTransferProgress) {
+    constructor(port = 0, onMessage, onFileReceived, onTransferProgress, onWebRTCSignal) {
         this.app = express()
         this.server = http.createServer(this.app)
         this.io = new SocketIOServer(this.server, {
@@ -18,6 +18,7 @@ export class LanServer {
         this.onMessage = onMessage
         this.onFileReceived = onFileReceived
         this.onTransferProgress = onTransferProgress
+        this.onWebRTCSignal = onWebRTCSignal
 
         // Setup file storage directory
         this.downloadDir = path.join(os.homedir(), 'Downloads', 'LAN_Share')
@@ -44,10 +45,26 @@ export class LanServer {
 
         this.setupRoutes()
         this.setupSockets()
+
+        // Cleanup abandoned chunks every hour
+        this.cleanupInterval = setInterval(() => {
+            this.cleanupAbandonedTransfers()
+        }, 1000 * 60 * 60)
     }
 
     setupRoutes() {
         this.app.use(express.json())
+
+        // Global CORS Middleware for fetch requests from renderer
+        this.app.use((req, res, next) => {
+            res.header('Access-Control-Allow-Origin', '*');
+            res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+            res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+            if (req.method === 'OPTIONS') {
+                return res.sendStatus(200);
+            }
+            next();
+        });
 
         // Middleware to block public folder access if not enabled
         this.app.use('/public', (req, res, next) => {
@@ -140,15 +157,18 @@ export class LanServer {
                 }
 
                 // Check if finished
-                if (transfer.receivedChunks.size === transfer.totalChunks) {
+                if (transfer.receivedChunks.size === transfer.totalChunks && !transfer.isMerging) {
+                    transfer.isMerging = true; // Lock it against parallel chunks finishing at exactly the same time
                     const activeDownloadDir = this.customDownloadDir || this.downloadDir;
-                    const finalPath = path.join(activeDownloadDir, meta.fileName);
+
+                    // Secure filename + avoid collisions
+                    const finalPath = await this.getUniqueFilePath(activeDownloadDir, meta.fileName);
 
                     await this.mergeChunks(meta.fileId, transfer.totalChunks, finalPath);
 
                     if (this.onFileReceived) {
                         this.onFileReceived({
-                            name: meta.fileName,
+                            name: path.basename(finalPath),
                             size: transfer.totalSize,
                             path: finalPath,
                             sender: transfer.senderId
@@ -157,7 +177,7 @@ export class LanServer {
 
                     // Clean up memory and temp dir
                     this.activeTransfers.delete(meta.fileId);
-                    await fs.promises.rm(path.join(this.tempDir, meta.fileId), { recursive: true, force: true });
+                    await fs.promises.rm(path.join(this.tempDir, meta.fileId), { recursive: true, force: true }).catch(() => { });
 
                     return res.json({ success: true, status: 'completed' });
                 }
@@ -173,7 +193,7 @@ export class LanServer {
         // Endpoint for receiving files (1-to-1)
         // const upload = multer({ dest: path.join(os.tmpdir(), 'lanshare_uploads') }) // This line was moved up
 
-        this.app.post('/upload', upload.single('file'), (req, res) => {
+        this.app.post('/upload', upload.single('file'), async (req, res) => {
             const file = req.file
             const meta = JSON.parse(req.body.meta || '{}')
 
@@ -183,7 +203,9 @@ export class LanServer {
 
             const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8')
             const activeDownloadDir = this.customDownloadDir || this.downloadDir;
-            const targetPath = path.join(activeDownloadDir, originalName)
+
+            // Secure filename + avoid collisions
+            const targetPath = await this.getUniqueFilePath(activeDownloadDir, originalName)
 
             fs.rename(file.path, targetPath, (err) => {
                 if (err) {
@@ -193,7 +215,7 @@ export class LanServer {
 
                 if (this.onFileReceived) {
                     this.onFileReceived({
-                        name: originalName,
+                        name: path.basename(targetPath),
                         size: file.size,
                         path: targetPath,
                         sender: meta.senderId
@@ -234,20 +256,15 @@ export class LanServer {
 
             // WebRTC Signaling Relays
             socket.on('webrtc-offer', (data) => {
-                // We emit locally so the main window can handle it (if we are the caster)
-                // Actually, if we are the caster, we receive offering sockets and relay to renderer
-                // We'll relay via IPC Event 'webrtc-offer'
-                if (mainWindow) mainWindow.webContents.send('webrtc-offer', data, socket.id)
+                if (this.onWebRTCSignal) this.onWebRTCSignal('webrtc-offer', data, socket.id)
             })
 
             socket.on('webrtc-answer', (data) => {
-                // If I am the viewer, the caster sends the answer back to me
-                // I will relay it to my local renderer
-                if (mainWindow) mainWindow.webContents.send('webrtc-answer', data)
+                if (this.onWebRTCSignal) this.onWebRTCSignal('webrtc-answer', data)
             })
 
             socket.on('webrtc-ice-candidate', (data) => {
-                if (mainWindow) mainWindow.webContents.send('webrtc-ice-candidate', data, socket.id)
+                if (this.onWebRTCSignal) this.onWebRTCSignal('webrtc-ice-candidate', data, socket.id)
             })
 
             socket.on('disconnect', () => {
@@ -288,6 +305,44 @@ export class LanServer {
         });
     }
 
+    async cleanupAbandonedTransfers() {
+        const threshold = Date.now() - (1000 * 60 * 60 * 2); // 2 hours
+        for (const [fileId, transfer] of this.activeTransfers.entries()) {
+            if (transfer.lastActive < threshold) {
+                console.log(`Cleaning up abandoned transfer: ${fileId}`);
+                this.activeTransfers.delete(fileId);
+                const fileTempDir = path.join(this.tempDir, fileId);
+                if (fs.existsSync(fileTempDir)) {
+                    await fs.promises.rm(fileTempDir, { recursive: true, force: true }).catch(() => { });
+                }
+            }
+        }
+    }
+
+    async getUniqueFilePath(dir, originalName) {
+        // Prevent directory traversal attacks by forcing it to just the base filename
+        // We replace slashes just to be absolutely certain it doesn't try escaping
+        let baseName = path.basename(originalName.replace(/\\/g, '/'));
+
+        // Strip out any weird unprintable chars just in case
+        baseName = baseName.replace(/[\0\/\\:\*\?\"<>\|]/g, '_')
+
+        if (!baseName || baseName === '..') {
+            baseName = `file_${Date.now()}.bin`;
+        }
+
+        let targetPath = path.join(dir, baseName);
+        let counter = 1;
+
+        while (fs.existsSync(targetPath)) {
+            const ext = path.extname(baseName);
+            const base = path.basename(baseName, ext);
+            targetPath = path.join(dir, `${base} (${counter})${ext}`);
+            counter++;
+        }
+        return targetPath;
+    }
+
     start() {
         return new Promise((resolve) => {
             this.server.listen(this.port, '0.0.0.0', () => {
@@ -302,5 +357,9 @@ export class LanServer {
 
     stop() {
         this.server.close()
+        if (this.cleanupInterval) {
+            clearInterval(this.cleanupInterval);
+            this.cleanupInterval = null;
+        }
     }
 }

@@ -48,6 +48,17 @@ export class DiscoveryService {
             const deviceId = service.txt?.deviceId || service.name;
             console.log('Found peer:', service.name, service.host)
 
+            let bestAddress = service.host;
+            if (service.addresses && service.addresses.length > 0) {
+                // Try to find an IPv4 address to avoid IPv6 URL parsing headaches
+                const ipv4 = service.addresses.find(ip => ip.includes('.'));
+                bestAddress = ipv4 || service.addresses[0];
+            }
+            // Format for URL interpolation if it is an IPv6 address
+            if (bestAddress && bestAddress.includes(':') && !bestAddress.startsWith('[')) {
+                bestAddress = `[${bestAddress}]`;
+            }
+
             const device = {
                 id: deviceId,
                 instanceName: service.name,
@@ -55,7 +66,7 @@ export class DiscoveryService {
                 os: service.txt?.os || 'unknown',
                 avatar: service.txt?.avatar || '💻',
                 isCasting: service.txt?.isCasting === 'true',
-                address: service.addresses?.[0] || service.host,
+                address: bestAddress,
                 port: service.port,
                 status: 'online',
                 lastSeen: Date.now()

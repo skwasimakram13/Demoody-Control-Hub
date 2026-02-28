@@ -119,6 +119,9 @@ async function startServices() {
         },
         (progress) => {
             if (mainWindow) mainWindow.webContents.send('transfer-progress', progress)
+        },
+        (type, data, socketId) => {
+            if (mainWindow) mainWindow.webContents.send(type, data, socketId)
         }
     )
 
