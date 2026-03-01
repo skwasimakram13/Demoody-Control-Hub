@@ -8,12 +8,14 @@ import { autoUpdater } from 'electron-updater'
 import { DiscoveryService } from './discovery'
 import { LanServer } from './server'
 import icon from '../../build/icon.png?asset'
+import windowStateKeeper from 'electron-window-state'
 
 let mainWindow = null
 let lanServer = null
 let discoveryService = null
 let tray = null
 let isQuitting = false
+let hasShownBackgroundWarning = false
 
 function getStableHardwareId() {
     const interfaces = os.networkInterfaces();
@@ -53,9 +55,16 @@ function saveConfig() {
 }
 
 function createWindow() {
+    let mainWindowState = windowStateKeeper({
+        defaultWidth: 1100,
+        defaultHeight: 750
+    })
+
     mainWindow = new BrowserWindow({
-        width: 1100,
-        height: 750,
+        x: mainWindowState.x,
+        y: mainWindowState.y,
+        width: mainWindowState.width,
+        height: mainWindowState.height,
         minWidth: 800,
         minHeight: 600,
         show: false,
@@ -68,14 +77,17 @@ function createWindow() {
         }
     })
 
+    mainWindowState.manage(mainWindow)
+
     // Hide instead of close to run in background
     mainWindow.on('close', (event) => {
         if (!isQuitting) {
             event.preventDefault()
             mainWindow.hide()
 
-            // Optionally notify user it's still running
-            if (Notification.isSupported()) {
+            // Optionally notify user it's still running (only once per session)
+            if (!hasShownBackgroundWarning && Notification.isSupported()) {
+                hasShownBackgroundWarning = true
                 new Notification({
                     title: 'Demoody Control Hub',
                     body: 'App is still running in the background. Check your system tray.'
@@ -145,166 +157,227 @@ async function startServices() {
     discoveryService.start()
 }
 
-app.whenReady().then(() => {
-    loadConfig()
+const gotTheLock = app.requestSingleInstanceLock()
 
-    // Enable auto-start on boot
-    app.setLoginItemSettings({
-        openAtLogin: true,
-        args: ['--hidden']
-    })
-
-    // Setup Auto Updater
-    autoUpdater.logger = console;
-    autoUpdater.checkForUpdatesAndNotify();
-
-    autoUpdater.on('update-available', () => {
-        if (mainWindow) mainWindow.webContents.send('update-message', 'Update available. Downloading...');
-    });
-    autoUpdater.on('update-downloaded', () => {
-        if (mainWindow) mainWindow.webContents.send('update-message', 'Update downloaded. Restarting...');
-        autoUpdater.quitAndInstall();
-    });
-
-    electronApp.setAppUserModelId('com.lanshare.app')
-
-    app.on('browser-window-created', (_, window) => {
-        optimizer.watchWindowShortcuts(window)
-    })
-
-    // IPC handlers
-    ipcMain.handle('get-devices', () => {
-        return discoveryService ? discoveryService.getDevices() : []
-    })
-
-    ipcMain.on('clear-inactive-devices', () => {
-        if (discoveryService) {
-            discoveryService.clearInactiveDevices()
+if (!gotTheLock && !is.dev) {
+    app.quit()
+} else {
+    app.on('second-instance', (event, commandLine, workingDirectory) => {
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore()
+            if (!mainWindow.isVisible()) mainWindow.show()
+            mainWindow.focus()
         }
     })
 
-    ipcMain.on('refresh-devices', () => {
-        if (discoveryService) {
-            discoveryService.refresh()
-        }
-    })
+    app.whenReady().then(() => {
+        loadConfig()
 
-    ipcMain.on('set-public-folder', (_, { enabled, path }) => {
-        if (lanServer) lanServer.setPublicFolderAccess(enabled, path)
-    })
-
-    ipcMain.on('set-download-folder', (_, path) => {
-        if (lanServer) lanServer.setDownloadFolder(path)
-    })
-
-    ipcMain.handle('select-folder', async () => {
-        const result = await dialog.showOpenDialog(mainWindow, {
-            properties: ['openDirectory']
+        // Enable auto-start on boot
+        app.setLoginItemSettings({
+            openAtLogin: true,
+            args: ['--hidden']
         })
-        return result.canceled ? null : result.filePaths[0]
-    })
 
-    ipcMain.on('set-identity', (_, { name, avatar }) => {
-        if (name) appConfig.deviceName = name;
-        if (avatar) appConfig.avatar = avatar;
-        saveConfig();
+        // Setup Auto Updater
+        autoUpdater.logger = console;
+        autoUpdater.setFeedURL({
+            provider: 'github',
+            owner: 'skwasimakram13',
+            repo: 'Demoody-Control-Hub'
+        });
 
-        if (discoveryService) {
-            discoveryService.updateIdentity(name, avatar)
+        if (is.dev) {
+            autoUpdater.forceDevUpdateConfig = true;
         }
-    })
 
-    ipcMain.on('complete-onboarding', () => {
-        appConfig.isFirstLaunch = false;
-        saveConfig();
-    })
+        autoUpdater.checkForUpdatesAndNotify().catch(err => {
+            console.log("Checking for updates skipped or failed: ", err.message);
+        });
 
-    ipcMain.on('set-casting-state', (_, isCasting) => {
-        if (discoveryService) {
-            discoveryService.setCastingState(isCasting)
-        }
-    })
+        autoUpdater.on('checking-for-update', () => {
+            if (mainWindow) mainWindow.webContents.send('update-message', 'Checking for updates...');
+        });
 
-    // WebRTC signaling routing (Renderer -> Server -> Remote Socket)
-    ipcMain.on('send-webrtc-answer', (_, { socketId, data }) => {
-        if (lanServer) lanServer.io.to(socketId).emit('webrtc-answer', data)
-    })
+        autoUpdater.on('update-available', () => {
+            if (mainWindow) mainWindow.webContents.send('update-message', 'Update found. Downloading...');
+        });
 
-    ipcMain.on('send-webrtc-ice-candidate', (_, { socketId, data }) => {
-        if (lanServer) lanServer.io.to(socketId).emit('webrtc-ice-candidate', data)
-    })
+        autoUpdater.on('update-not-available', () => {
+            if (mainWindow) mainWindow.webContents.send('update-message', 'App is up to date.');
+        });
 
-    ipcMain.handle('get-desktop-sources', async () => {
-        const sources = await desktopCapturer.getSources({ types: ['screen'] })
-        return sources.map(s => ({ id: s.id, name: s.name }))
-    })
+        autoUpdater.on('error', (err) => {
+            const errorMsg = err.message || 'Error in auto-updater.';
+            if (mainWindow) mainWindow.webContents.send('update-message', `Error: ${errorMsg}`);
+            console.error('Updater error:', err);
+        });
 
-    ipcMain.handle('get-my-info', () => {
-        return {
-            id: appConfig.deviceId,
-            name: appConfig.deviceName,
-            os: discoveryService?.platform,
-            avatar: appConfig.avatar,
-            isFirstLaunch: appConfig.isFirstLaunch,
-            port: lanServer?.port,
-            publicFolder: lanServer?.customPublicDir || lanServer?.publicDir,
-            downloadFolder: lanServer?.customDownloadDir || lanServer?.downloadDir
-        }
-    })
+        autoUpdater.on('download-progress', (progressObj) => {
+            let log_message = `Downloading... ${Math.round(progressObj.percent)}%`;
+            if (mainWindow) mainWindow.webContents.send('update-message', log_message);
+        });
 
-    startServices().then(() => {
-        if (!process.argv.includes('--hidden')) {
-            createWindow()
-        } else {
-            // If it was auto-started via boot/background, create window but don't show it immediately
-            createWindow()
-            if (mainWindow) mainWindow.hide()
-        }
-    })
+        autoUpdater.on('update-downloaded', () => {
+            if (mainWindow) mainWindow.webContents.send('update-message', 'Update downloaded. Restarting...');
+            setTimeout(() => {
+                autoUpdater.quitAndInstall();
+            }, 3000); // Give user 3 seconds to read the message before force-quitting
+        });
 
-    app.on('activate', function () {
-        if (BrowserWindow.getAllWindows().length === 0) createWindow()
-    })
+        electronApp.setAppUserModelId('com.lanshare.app')
 
-    // Create Tray
-    let trayIcon = nativeImage.createFromPath(icon)
-    if (trayIcon.isEmpty()) {
-        // Fallback to empty transparent icon if no file exists
-        trayIcon = nativeImage.createEmpty()
-        trayIcon.resize({ width: 16, height: 16 })
-    }
-    tray = new Tray(trayIcon)
+        app.on('browser-window-created', (_, window) => {
+            optimizer.watchWindowShortcuts(window)
+        })
 
-    // Set context menu
-    const contextMenu = Menu.buildFromTemplate([
-        { label: 'Show Demoody Control Hub', click: () => { if (mainWindow) mainWindow.show() } },
-        { type: 'separator' },
-        {
-            label: 'Quit Demoody Control Hub', click: () => {
-                isQuitting = true
-                app.quit()
+        // IPC handlers
+        ipcMain.handle('get-devices', () => {
+            return discoveryService ? discoveryService.getDevices() : []
+        })
+
+        ipcMain.on('clear-inactive-devices', () => {
+            if (discoveryService) {
+                discoveryService.clearInactiveDevices()
             }
+        })
+
+        ipcMain.on('refresh-devices', () => {
+            if (discoveryService) {
+                discoveryService.refresh()
+            }
+        })
+
+        ipcMain.on('check-for-updates', () => {
+            autoUpdater.checkForUpdates().catch(err => {
+                console.log("Manual update check failed: ", err.message);
+                if (mainWindow) mainWindow.webContents.send('update-message', `Update check failed: ${err.message}`);
+            });
+        })
+
+        ipcMain.on('set-public-folder', (_, { enabled, path }) => {
+            if (lanServer) lanServer.setPublicFolderAccess(enabled, path)
+        })
+
+        ipcMain.on('set-download-folder', (_, path) => {
+            if (lanServer) lanServer.setDownloadFolder(path)
+        })
+
+        ipcMain.handle('select-folder', async () => {
+            const result = await dialog.showOpenDialog(mainWindow, {
+                properties: ['openDirectory']
+            })
+            return result.canceled ? null : result.filePaths[0]
+        })
+
+        ipcMain.on('set-identity', (_, { name, avatar }) => {
+            if (name) appConfig.deviceName = name;
+            if (avatar) appConfig.avatar = avatar;
+            saveConfig();
+
+            if (discoveryService) {
+                discoveryService.updateIdentity(name, avatar)
+            }
+        })
+
+        ipcMain.on('complete-onboarding', () => {
+            appConfig.isFirstLaunch = false;
+            saveConfig();
+        })
+
+        ipcMain.on('set-casting-state', (_, isCasting) => {
+            if (discoveryService) {
+                discoveryService.setCastingState(isCasting)
+            }
+        })
+
+        // WebRTC signaling routing (Renderer -> Server -> Remote Socket)
+        ipcMain.on('send-webrtc-answer', (_, { socketId, data }) => {
+            if (lanServer) lanServer.io.to(socketId).emit('webrtc-answer', data)
+        })
+
+        ipcMain.on('send-webrtc-ice-candidate', (_, { socketId, data }) => {
+            if (lanServer) lanServer.io.to(socketId).emit('webrtc-ice-candidate', data)
+        })
+
+        ipcMain.handle('get-desktop-sources', async () => {
+            const sources = await desktopCapturer.getSources({ types: ['screen'] })
+            return sources.map(s => ({ id: s.id, name: s.name }))
+        })
+
+        ipcMain.handle('get-my-info', () => {
+            return {
+                id: appConfig.deviceId,
+                name: appConfig.deviceName,
+                os: discoveryService?.platform,
+                avatar: appConfig.avatar,
+                isFirstLaunch: appConfig.isFirstLaunch,
+                port: lanServer?.port,
+                publicFolder: lanServer?.customPublicDir || lanServer?.publicDir,
+                downloadFolder: lanServer?.customDownloadDir || lanServer?.downloadDir
+            }
+        })
+
+        startServices().then(() => {
+            if (!process.argv.includes('--hidden')) {
+                createWindow()
+            } else {
+                // If it was auto-started via boot/background, create window but don't show it immediately
+                createWindow()
+                if (mainWindow) mainWindow.hide()
+            }
+        }).catch(err => {
+            console.error('Failed to start local background services:', err);
+            createWindow(); // Still show the UI even if services fail
+        })
+
+        app.on('activate', function () {
+            if (BrowserWindow.getAllWindows().length === 0) createWindow()
+        })
+
+        // Create Tray
+        let trayIcon = nativeImage.createFromPath(icon)
+        if (trayIcon.isEmpty()) {
+            // Fallback to empty transparent icon if no file exists
+            trayIcon = nativeImage.createEmpty()
+            trayIcon.resize({ width: 16, height: 16 })
         }
-    ])
+        tray = new Tray(trayIcon)
 
-    tray.setToolTip('Demoody Control Hub is running')
-    tray.setContextMenu(contextMenu)
+        // Set context menu
+        const contextMenu = Menu.buildFromTemplate([
+            { label: 'Show Demoody Control Hub', click: () => { if (mainWindow) mainWindow.show() } },
+            { type: 'separator' },
+            {
+                label: 'Quit Demoody Control Hub', click: () => {
+                    isQuitting = true
+                    app.quit()
+                }
+            }
+        ])
 
-    tray.on('double-click', () => {
-        if (mainWindow) mainWindow.show()
+        tray.setToolTip('Demoody Control Hub is running')
+        tray.setContextMenu(contextMenu)
+
+        tray.on('click', () => {
+            if (mainWindow) {
+                mainWindow.show()
+                mainWindow.focus()
+            }
+        })
     })
-})
 
-// We no longer quit when windows are closed, because the tray handles it
-app.on('window-all-closed', () => {
-    // Keep running
-})
+    // We no longer quit when windows are closed, because the tray handles it
+    app.on('window-all-closed', () => {
+        // Keep running
+    })
 
-app.on('before-quit', () => {
-    isQuitting = true
-})
+    app.on('before-quit', () => {
+        isQuitting = true
+    })
 
-app.on('quit', () => {
-    if (discoveryService) discoveryService.stop()
-    if (lanServer) lanServer.stop()
-})
+    app.on('quit', () => {
+        if (discoveryService) discoveryService.stop()
+        if (lanServer) lanServer.stop()
+    })
+}

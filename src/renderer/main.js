@@ -256,6 +256,30 @@ window.api.onWebrtcAnswer(async (answer) => {
     }
 });
 
+// Auto Updater Listeners
+const btnCheckUpdates = document.getElementById('btn-check-updates');
+const updateStatusText = document.getElementById('update-status-text');
+
+if (btnCheckUpdates) {
+    btnCheckUpdates.addEventListener('click', () => {
+        if (updateStatusText) updateStatusText.textContent = 'Checking...';
+        btnCheckUpdates.disabled = true;
+        // Re-enable after a timeout just in case it hangs
+        setTimeout(() => { btnCheckUpdates.disabled = false; }, 10000);
+        window.api.checkForUpdates();
+    });
+}
+
+window.api.onUpdateMessage((msg) => {
+    if (updateStatusText) {
+        updateStatusText.textContent = msg;
+        // If it's done or errored, re-enable the button
+        if (msg.includes('up to date') || msg.includes('Error')) {
+            if (btnCheckUpdates) btnCheckUpdates.disabled = false;
+        }
+    }
+});
+
 window.api.onWebrtcIceCandidate(async (candidate, socketId) => {
     // If we're the viewer, socketId isn't used here, we just use our 'viewer' pc
     // If we're the caster, we use the pc mapped to the socketId
@@ -469,20 +493,39 @@ function openChatWith(device) {
 function ensureSocketConnection(device) {
     if (!state.socketConnections.has(device.id)) {
         console.log(`Establishing peer connection to ${device.address}:${device.port}`);
-        // Connect to their server
-        const socket = io(`http://${device.address}:${device.port}`);
+        // Connect to their server with a timeout so it doesn't hang forever
+        const socket = io(`http://${device.address}:${device.port}`, {
+            timeout: 5000,
+            reconnectionAttempts: 2
+        });
 
         socket.on('connect', () => {
             console.log('Connected to peer!', device.name);
+            // Re-render to clear any "Connecting..." or error states if we had them
+            if (state.activeChatDevice?.id === device.id) {
+                renderChatMessages();
+            }
         });
 
-        // Handle messages THEY send US (since they broadcast to sockets)
-        // Actually, in LanServer, we send messages over IPC when received.
-        // If they connect to our socket and send, our IPC handles it. Wait, when they send a message to US,
-        // they send it via our Express server or Socket.
-        // Let's use pure HTTP for sending text and files to them to keep it simple!
-        // We don't need socket.io for client sending, we could just `fetch` to their IP.
-        // But since server.js uses Socket.IO, let's keep socket connections for real time text.
+        socket.on('connect_error', (error) => {
+            console.error(`Socket connect error to ${device.name}:`, error.message);
+            // Notify user the connection failed
+            addMessageToState(device.id, {
+                type: 'text',
+                senderInfo: 'system',
+                text: `⚠️ Could not connect to ${device.name}. They might be on a different network or have a hidden IP.`,
+                isError: true
+            });
+
+            // Clean up the dead socket
+            socket.disconnect();
+            state.socketConnections.delete(device.id);
+
+            if (state.activeChatDevice?.id === device.id) {
+                renderChatMessages();
+            }
+        });
+
         state.socketConnections.set(device.id, socket);
     }
 }
@@ -587,6 +630,18 @@ function renderChatMessages() {
         </div>
       `;
         }
+
+        if (msg.isError) {
+            div.style.background = 'rgba(255,50,50,0.1)';
+            div.style.color = '#ffb3b3';
+            div.style.fontSize = '0.85rem';
+            div.style.textAlign = 'center';
+            div.style.padding = '8px';
+            div.style.borderRadius = '6px';
+            div.style.margin = '10px 0';
+            div.style.alignSelf = 'center';
+        }
+
         chatMessages.appendChild(div);
     });
 
@@ -602,7 +657,14 @@ btnSend.addEventListener('click', async () => {
 
     // Connect to their Socket server and emit text if any
     if (text) {
-        const socket = state.socketConnections.get(state.activeChatDevice.id);
+        let socket = state.socketConnections.get(state.activeChatDevice.id);
+
+        if (!socket || !socket.connected) {
+            // Try to force connection again if it dropped
+            ensureSocketConnection(state.activeChatDevice);
+            socket = state.socketConnections.get(state.activeChatDevice.id);
+        }
+
         if (socket) {
             console.log(`[Renderer] Emitting message to socket for ${state.activeChatDevice.id}`);
             socket.emit('message', JSON.stringify({
@@ -774,10 +836,16 @@ async function startChunkedTransfer(fileId) {
             }));
 
             try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 sec timeout
+
                 const response = await fetch(`http://${deviceAddress}:${devicePort}/upload/chunk`, {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    signal: controller.signal
                 });
+
+                clearTimeout(timeoutId);
 
                 if (response.ok) {
                     transfer.sentChunks.add(chunkIndex);

@@ -232,7 +232,11 @@ export class LanServer {
                 return res.status(403).json({ error: 'Public folder is not enabled' })
             }
 
-            const activeDir = this.customPublicDir || this.publicDir
+            const activeDir = this.customPublicDir || this.publicDir;
+
+            if (!activeDir) {
+                return res.status(500).json({ error: 'Public folder path not set' })
+            }
 
             fs.readdir(activeDir, (err, files) => {
                 if (err) {
@@ -294,8 +298,17 @@ export class LanServer {
 
         for (let i = 0; i < totalChunks; i++) {
             const chunkPath = path.join(this.tempDir, fileId, `${i}.chunk`);
-            const data = await fs.promises.readFile(chunkPath);
-            writeStream.write(data);
+            const readStream = fs.createReadStream(chunkPath);
+            await new Promise((resolve, reject) => {
+                readStream.on('data', (chunk) => {
+                    if (!writeStream.write(chunk)) {
+                        readStream.pause();
+                        writeStream.once('drain', () => readStream.resume());
+                    }
+                });
+                readStream.on('end', resolve);
+                readStream.on('error', reject);
+            });
         }
 
         return new Promise((resolve, reject) => {

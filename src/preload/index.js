@@ -13,6 +13,7 @@ const api = {
     clearInactiveDevices: () => ipcRenderer.send('clear-inactive-devices'),
     refreshDevices: () => ipcRenderer.send('refresh-devices'),
     completeOnboarding: () => ipcRenderer.send('complete-onboarding'),
+    checkForUpdates: () => ipcRenderer.send('check-for-updates'),
 
     // WebRTC sending
     sendWebrtcAnswer: (socketId, data) => ipcRenderer.send('send-webrtc-answer', { socketId, data }),
@@ -26,7 +27,8 @@ const api = {
     onTransferProgress: (callback) => ipcRenderer.on('transfer-progress', (_, progress) => callback(progress)),
     onWebrtcOffer: (callback) => ipcRenderer.on('webrtc-offer', (_, data, socketId) => callback(data, socketId)),
     onWebrtcAnswer: (callback) => ipcRenderer.on('webrtc-answer', (_, data) => callback(data)),
-    onWebrtcIceCandidate: (callback) => ipcRenderer.on('webrtc-ice-candidate', (_, data, socketId) => callback(data, socketId))
+    onWebrtcIceCandidate: (callback) => ipcRenderer.on('webrtc-ice-candidate', (_, data, socketId) => callback(data, socketId)),
+    onUpdateMessage: (callback) => ipcRenderer.on('update-message', (_, msg) => callback(msg))
 }
 
 if (process.contextIsolated) {
